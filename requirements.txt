@@ -1,2 +1,4 @@
 discord.py-self==2.1.0
 python-dotenv>=1.0.0
+openai>=1.0.0
+python-binance>=1.0.19
