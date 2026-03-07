@@ -1,0 +1,29 @@
+services:
+  - type: worker          # 后台长驻进程，不对外暴露端口
+    name: autotrade-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false       # 在 Render Dashboard 手动填写，不写入代码
+      - key: CHANNEL_ID
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: anthropic/claude-sonnet-4.6
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
+      - key: DEFAULT_LEVERAGE
+        value: "10"
+      - key: DEFAULT_SIZE_USDT
+        value: "100"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PYTHONUNBUFFERED
+        value: "1"        # 让日志实时输出，不被缓冲
+      - key: DRY_RUN
+        value: "true"     # 只解析信号，不真实下单

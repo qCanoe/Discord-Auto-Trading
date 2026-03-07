@@ -1,6 +1,8 @@
 """
 Discord 自动交易系统入口
 流程：Discord 消息 → AI 解析 → 信号校验 → Binance 合约下单
+
+DRY_RUN=true 时只解析打印信号，不连接交易所
 """
 
 import os
@@ -11,7 +13,6 @@ import discord
 from dotenv import load_dotenv
 
 from src.parser import SignalParser
-from src.executor import BinanceExecutor
 
 load_dotenv()
 
@@ -30,12 +31,20 @@ logger = logging.getLogger("main")
 # ------------------------------------------------------------------
 TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
 
 # ------------------------------------------------------------------
 # 全局实例
 # ------------------------------------------------------------------
 parser = SignalParser()
-executor = BinanceExecutor()
+
+if not DRY_RUN:
+    from src.executor import BinanceExecutor
+    executor = BinanceExecutor()
+else:
+    executor = None
+    logger.info("*** DRY_RUN 模式：只解析信号，不执行下单 ***")
+
 client = discord.Client()
 
 
@@ -47,7 +56,8 @@ client = discord.Client()
 async def on_ready():
     channel = client.get_channel(CHANNEL_ID)
     name = f"#{channel.name}" if channel else str(CHANNEL_ID)
-    logger.info(f"已连接 Discord，监听频道: {name}")
+    mode = "[DRY RUN]" if DRY_RUN else "[LIVE]"
+    logger.info(f"{mode} 已连接 Discord，监听频道: {name}")
     logger.info("-" * 50)
 
 
@@ -56,7 +66,6 @@ async def on_message(message: discord.Message):
     if message.channel.id != CHANNEL_ID:
         return
 
-    # 忽略自己发送的消息
     if message.author.id == client.user.id:
         return
 
@@ -73,10 +82,15 @@ async def on_message(message: discord.Message):
     if signal is None:
         return
 
-    # 2. 执行交易
-    logger.info(f"准备执行: {signal.action.value} {signal.symbol}")
-    success = await executor.execute(signal)
+    # 2. 打印解析结果
+    logger.info(f"\n{signal.summary()}")
 
+    if DRY_RUN:
+        logger.info("[DRY RUN] 信号已解析，跳过下单")
+        return
+
+    # 3. 执行交易（仅 DRY_RUN=false 时）
+    success = await executor.execute(signal)
     if success:
         logger.info(f"执行成功: {signal.action.value} {signal.symbol}")
     else:
