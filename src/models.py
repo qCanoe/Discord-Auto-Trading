@@ -53,6 +53,8 @@ class Signal:
             self.action = Action(self.action)
         if isinstance(self.order_type, str):
             self.order_type = OrderType(self.order_type)
+        if not self.symbol:
+            self.symbol = "UNKNOWN"
         self.symbol = self.symbol.upper().replace("/", "").replace("-", "")
         if not self.symbol.endswith("USDT"):
             self.symbol = self.symbol + "USDT"
@@ -104,6 +106,9 @@ class Signal:
         elif self.tp:
             lines.append(f"  止盈: {self.tp}")
 
-        if self.sl:
-            lines.append(f"  止损: {self.sl}")
+        if self.reduce_pct is not None:
+            lines.append(f"  减仓比例: {self.reduce_pct}%")
+        if self.sl is not None:
+            sl_str = "移动至保本" if self.sl == 0 else str(self.sl)
+            lines.append(f"  止损: {sl_str}")
         return "\n".join(lines)

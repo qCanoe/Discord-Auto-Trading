@@ -13,6 +13,7 @@ import discord
 from dotenv import load_dotenv
 
 from src.parser import SignalParser
+from src.position_tracker import PositionTracker
 
 load_dotenv()
 
@@ -37,6 +38,7 @@ DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
 # 全局实例
 # ------------------------------------------------------------------
 parser = SignalParser()
+tracker = PositionTracker()
 
 if not DRY_RUN:
     from src.executor import BinanceExecutor
@@ -82,19 +84,47 @@ async def on_message(message: discord.Message):
     if signal is None:
         return
 
-    # 2. 打印解析结果
+    # 2. 无币种信号 → 从持仓推断 symbol
+    if signal.symbol == "UNKNOWNUSDT":
+        resolved = await tracker.resolve_symbol(text, parser)
+        if resolved is None:
+            logger.warning("无法推断币种，当前无持仓记录，跳过该信号")
+            return
+        signal.symbol = resolved
+
+    # 3. 打印解析结果
     logger.info(f"\n{signal.summary()}")
+    logger.info(tracker.summary())
 
     if DRY_RUN:
+        # DRY RUN 下同步更新持仓状态，方便后续信号推断
+        _update_tracker(signal)
         logger.info("[DRY RUN] 信号已解析，跳过下单")
         return
 
-    # 3. 执行交易（仅 DRY_RUN=false 时）
+    # 4. 执行交易（仅 DRY_RUN=false 时）
     success = await executor.execute(signal)
     if success:
         logger.info(f"执行成功: {signal.action.value} {signal.symbol}")
+        _update_tracker(signal)
     else:
         logger.error(f"执行失败: {signal.action.value} {signal.symbol}")
+
+
+# ------------------------------------------------------------------
+# 持仓状态同步
+# ------------------------------------------------------------------
+
+def _update_tracker(signal) -> None:
+    """根据信号结果更新持仓记录"""
+    from src.models import Action
+    if signal.action in (Action.OPEN_LONG, Action.OPEN_SHORT):
+        tracker.open(signal)
+    elif signal.action == Action.CLOSE:
+        tracker.close(signal.symbol)
+    elif signal.action == Action.REDUCE:
+        if signal.reduce_pct is not None:
+            tracker.reduce(signal.symbol, signal.reduce_pct)
 
 
 # ------------------------------------------------------------------
