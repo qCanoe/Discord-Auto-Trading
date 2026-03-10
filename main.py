@@ -50,9 +50,7 @@ else:
     executor = None
     logger.info("*** DRY_RUN 模式：只解析信号，不执行下单 ***")
 
-intents = discord.Intents.default()
-intents.message_content = True
-client = discord.Client(intents=intents)
+client = discord.Client()
 trade_logger = TradeLogger()
 
 

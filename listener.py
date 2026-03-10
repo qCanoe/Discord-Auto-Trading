@@ -23,9 +23,7 @@ log = logging.getLogger("listener")
 TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
-intents = discord.Intents.default()
-intents.message_content = True
-client = discord.Client(intents=intents)
+client = discord.Client()
 
 # 记录最后处理的消息 ID，用于断线重连后补偿历史消息
 # Last message ID for catch-up after reconnect
