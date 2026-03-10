@@ -51,7 +51,7 @@ else:
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
-trade_logger: TradeLogger = None
+trade_logger = TradeLogger()
 
 
 # ------------------------------------------------------------------
@@ -60,8 +60,6 @@ trade_logger: TradeLogger = None
 
 @client.event
 async def on_ready():
-    global trade_logger
-    trade_logger = TradeLogger(client)
     channel = client.get_channel(CHANNEL_ID)
     name = f"#{channel.name}" if channel else str(CHANNEL_ID)
     mode = "[DRY RUN]" if DRY_RUN else "[LIVE]"
