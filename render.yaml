@@ -10,6 +10,8 @@ services:
         sync: false       # 在 Render Dashboard 手动填写，不写入代码
       - key: CHANNEL_ID
         sync: false
+      - key: TRADE_LOG_CHANNEL_ID
+        sync: false
       - key: OPENROUTER_API_KEY
         sync: false
       - key: OPENROUTER_MODEL

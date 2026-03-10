@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 from src.parser import SignalParser
 from src.position_tracker import PositionTracker
+from src.trade_logger import TradeLogger
 
 load_dotenv()
 
@@ -47,7 +48,10 @@ else:
     executor = None
     logger.info("*** DRY_RUN 模式：只解析信号，不执行下单 ***")
 
-client = discord.Client()
+intents = discord.Intents.default()
+intents.message_content = True
+client = discord.Client(intents=intents)
+trade_logger: TradeLogger = None
 
 
 # ------------------------------------------------------------------
@@ -56,6 +60,8 @@ client = discord.Client()
 
 @client.event
 async def on_ready():
+    global trade_logger
+    trade_logger = TradeLogger(client)
     channel = client.get_channel(CHANNEL_ID)
     name = f"#{channel.name}" if channel else str(CHANNEL_ID)
     mode = "[DRY RUN]" if DRY_RUN else "[LIVE]"
@@ -109,6 +115,10 @@ async def on_message(message: discord.Message):
         _update_tracker(signal)
     else:
         logger.error(f"执行失败: {signal.action.value} {signal.symbol}")
+
+    # 5. 推送交易记录到 Discord 日志频道
+    if trade_logger:
+        await trade_logger.log(signal, success)
 
 
 # ------------------------------------------------------------------
