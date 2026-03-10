@@ -23,7 +23,7 @@ class BinanceExecutor:
             api_secret=os.getenv("BINANCE_API_SECRET"),
         )
         self.default_leverage = int(os.getenv("DEFAULT_LEVERAGE", "10"))
-        self.default_size_usdt = float(os.getenv("DEFAULT_SIZE_USDT", "100"))
+        self.default_size_pct = float(os.getenv("DEFAULT_SIZE_PCT", "10"))
 
     # ------------------------------------------------------------------
     # 公开入口
@@ -195,11 +195,10 @@ class BinanceExecutor:
 
         if signal.size_usdt:
             notional = signal.size_usdt * self.default_leverage
-        elif signal.size_pct:
-            balance = self._get_usdt_balance()
-            notional = balance * signal.size_pct / 100 * self.default_leverage
         else:
-            notional = self.default_size_usdt * self.default_leverage
+            pct = signal.size_pct if signal.size_pct else self.default_size_pct
+            balance = self._get_usdt_balance()
+            notional = balance * pct / 100 * self.default_leverage
 
         quantity = notional / mark
         return self._floor_quantity(quantity, symbol)
