@@ -49,7 +49,13 @@ if not DRY_RUN:
     executor = BinanceExecutor()
 else:
     executor = None
-    logger.info("*** DRY_RUN 模式：只解析信号，不执行下单 ***")
+
+logger.info("=" * 50)
+if DRY_RUN:
+    logger.info("  模式: DRY RUN  ——  只解析信号，不执行下单")
+else:
+    logger.info("  模式: LIVE      ——  真实下单模式已启用")
+logger.info("=" * 50)
 
 client = discord.Client()
 trade_logger = TradeLogger()
