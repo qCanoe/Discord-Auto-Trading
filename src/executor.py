@@ -58,6 +58,11 @@ class BinanceExecutor:
         """开仓：设置杠杆 → 下主单 → 挂 TP/SL"""
         symbol = signal.symbol
 
+        # 0. 撤销之前的挂单（如信号要求更新）
+        if signal.cancel_previous:
+            self._cancel_open_orders(symbol)
+            logger.info(f"[撤单] 已取消 {symbol} 所有未成交挂单，准备重新下单")
+
         # 1. 设置杠杆
         leverage = self.default_leverage
         self.client.futures_change_leverage(symbol=symbol, leverage=leverage)

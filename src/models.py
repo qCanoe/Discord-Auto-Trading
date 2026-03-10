@@ -46,6 +46,7 @@ class Signal:
     size_pct: Optional[float] = None
     reduce_pct: Optional[float] = None
     leverage: Optional[int] = None          # 全局杠杆（entries 为空时使用）
+    cancel_previous: bool = False           # 执行前先撤销该 symbol 所有未成交挂单
     raw_text: str = ""
 
     def __post_init__(self):
