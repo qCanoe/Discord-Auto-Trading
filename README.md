@@ -1,48 +1,48 @@
 # Autotrade
 
-Discord 消息 → AI 解析 → Binance U本位合约跟单
+Discord messages → AI parsing → Binance USDT-M futures copy trading
 
-## 流程
+## Flow
 
-1. 监听指定 Discord 频道的交易信号
-2. 使用 OpenRouter AI 解析自然语言为结构化信号
-3. 调用 Binance 合约 API 执行开多/开空/平仓/减仓
-4. 成交结果通过 Webhook 推送到交易日志频道
+1. Listen for trading signals in a Discord channel
+2. Parse natural language into structured signals via OpenRouter AI
+3. Execute long/short/open/close/reduce via Binance Futures API
+4. Push trade results to a log channel via Webhook
 
-## 环境变量
+## Environment Variables
 
-| 变量 | 说明 |
-|-----|------|
-| `DISCORD_TOKEN` | Discord 用户 Token（监听信号频道） |
-| `CHANNEL_ID` | 监听频道的 ID |
-| `TRADE_LOG_WEBHOOK_URL` | 交易日志 Webhook URL |
-| `OPENROUTER_API_KEY` | OpenRouter API Key |
-| `OPENROUTER_MODEL` | 解析模型，如 `anthropic/claude-sonnet-4.6` |
-| `BINANCE_API_KEY` | Binance 合约 API Key |
-| `BINANCE_API_SECRET` | Binance 合约 API Secret |
-| `DEFAULT_LEVERAGE` | 默认杠杆倍数 |
-| `DEFAULT_SIZE_PCT` | 默认开仓占余额百分比 |
-| `DRY_RUN` | `true` 只解析不下单，`false` 正式交易 |
+| Variable | Description |
+|----------|-------------|
+| `DISCORD_TOKEN` | Discord user token (for listening to signal channel) |
+| `CHANNEL_ID` | ID of the channel to listen |
+| `TRADE_LOG_WEBHOOK_URL` | Webhook URL for trade log channel |
+| `OPENROUTER_API_KEY` | OpenRouter API key |
+| `OPENROUTER_MODEL` | Model for parsing, e.g. `anthropic/claude-sonnet-4.6` |
+| `BINANCE_API_KEY` | Binance Futures API key |
+| `BINANCE_API_SECRET` | Binance Futures API secret |
+| `DEFAULT_LEVERAGE` | Default leverage |
+| `DEFAULT_SIZE_PCT` | Default position size as % of balance |
+| `DRY_RUN` | `true` = parse only, no orders; `false` = live trading |
 
-## 本地运行
+## Local Run
 
 ```bash
 pip install -r requirements.txt
-# 创建 .env 并填入配置
+# Create .env and fill in config
 python main.py
 ```
 
-## 部署到 Render
+## Deploy to Render
 
-1. 连接 GitHub 仓库
-2. 选择 Blueprint，Render 自动读取 `render.yaml`
-3. 在 Dashboard 填写 `sync: false` 的密钥
-4. 将服务部署到 **Singapore** 区域（避免 Binance 美国限制）
-5. Binance API 需添加 Render 出口 IP 白名单
+1. Connect your GitHub repo
+2. Use Blueprint so Render reads `render.yaml` automatically
+3. Fill in secrets for `sync: false` vars in Dashboard
+4. Deploy to **Singapore** region (avoids Binance US restrictions)
+5. Add Render outbound IP to Binance API whitelist
 
-## 测试
+## Tests
 
 ```bash
-python test/bn_test_api.py      # Binance API 连通性
-python test/test_parser.py      # 信号解析（需 VPN，OpenRouter 地区限制）
+python test/bn_test_api.py      # Binance API connectivity
+python test/test_parser.py      # Signal parsing (VPN needed for OpenRouter region limits)
 ```
