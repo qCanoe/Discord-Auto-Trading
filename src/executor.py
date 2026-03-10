@@ -5,6 +5,7 @@ Binance U本位合约执行器
 
 import os
 import math
+import time
 import logging
 from typing import Optional
 
@@ -24,6 +25,18 @@ class BinanceExecutor:
         )
         self.default_leverage = int(os.getenv("DEFAULT_LEVERAGE", "10"))
         self.default_size_pct = float(os.getenv("DEFAULT_SIZE_PCT", "10"))
+
+        # 校准时间戳偏移，防止 -1021 错误
+        try:
+            server_ts = self.client.futures_time()["serverTime"]
+            self.client.timestamp_offset = server_ts - int(time.time() * 1000)
+        except Exception:
+            pass
+
+        # exchange_info 缓存：weight=40，启动时拉取一次，运行期间复用
+        self._exchange_info_cache: Optional[dict] = None
+        self._exchange_info_ts: float = 0
+        self._exchange_info_ttl: float = 3600  # 1小时刷新一次
 
     # ------------------------------------------------------------------
     # 公开入口
@@ -232,10 +245,19 @@ class BinanceExecutor:
         except BinanceAPIException as e:
             logger.warning(f"取消挂单失败: {e.message}")
 
+    def _get_exchange_info(self) -> dict:
+        """获取 exchange info，带本地缓存（1小时刷新一次，避免频繁高权重请求）"""
+        now = time.time()
+        if self._exchange_info_cache is None or (now - self._exchange_info_ts) > self._exchange_info_ttl:
+            self._exchange_info_cache = self.client.futures_exchange_info()
+            self._exchange_info_ts = now
+            logger.debug("已刷新 exchange_info 缓存")
+        return self._exchange_info_cache
+
     def _floor_quantity(self, quantity: float, symbol: str) -> float:
         """根据交易所精度规则向下取整合约数量"""
         try:
-            info = self.client.futures_exchange_info()
+            info = self._get_exchange_info()
             for s in info["symbols"]:
                 if s["symbol"] == symbol:
                     for f in s["filters"]:
