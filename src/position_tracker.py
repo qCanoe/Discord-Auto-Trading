@@ -1,7 +1,8 @@
 """
-持仓追踪器
+持仓追踪器 / Position Tracker
 记录当前所有开放仓位，供无币种信号（reduce/close）推断操作对象使用
-数据持久化到 positions.json，重启后自动恢复
+Track open positions for symbol inference when signal has no symbol
+数据持久化到 positions.json，重启后自动恢复 / Persisted to positions.json, restored on restart
 """
 
 import json
@@ -25,8 +26,8 @@ class Position:
     entry_price: Optional[float]
     size_usdt: float
     leverage: int
-    opened_at: str               # ISO 8601 字符串，方便 JSON 序列化
-    raw_text: str = ""           # 开仓原始消息，便于回溯
+    opened_at: str               # ISO 8601 字符串，方便 JSON 序列化 / ISO 8601 for JSON
+    raw_text: str = ""           # 开仓原始消息，便于回溯 / Original signal for traceback
 
     @property
     def opened_dt(self) -> datetime:
@@ -39,11 +40,11 @@ class PositionTracker:
         self._load()
 
     # ------------------------------------------------------------------
-    # 持仓 CRUD
+    # 持仓 CRUD / Position CRUD
     # ------------------------------------------------------------------
 
     def open(self, signal: Signal, size_usdt: float = 0.0) -> None:
-        """记录新开仓"""
+        """记录新开仓 / Record new position"""
         side = "long" if signal.action == Action.OPEN_LONG else "short"
         entry_price = signal.entries[0].price if signal.entries else signal.entry_price
         leverage = signal.entries[0].leverage if signal.entries else (signal.leverage or 20)
@@ -62,7 +63,7 @@ class PositionTracker:
         self._save()
 
     def close(self, symbol: str) -> Optional[Position]:
-        """移除持仓，返回已关闭的仓位信息"""
+        """移除持仓，返回已关闭的仓位信息 / Remove position, return closed info"""
         pos = self._positions.pop(symbol, None)
         if pos:
             logger.info(f"[持仓] 关闭 {pos.side.upper()} {symbol}")
@@ -70,14 +71,14 @@ class PositionTracker:
         return pos
 
     def reduce(self, symbol: str, pct: float) -> Optional[Position]:
-        """减仓（仅记录日志，不修改 size，因为无精确成交回报）"""
+        """减仓（仅记录日志，不修改 size，因为无精确成交回报）/ Reduce (log only, no size update)"""
         pos = self._positions.get(symbol)
         if pos:
             logger.info(f"[持仓] 减仓 {symbol}  {pct}%  剩余持仓继续追踪")
         return pos
 
     # ------------------------------------------------------------------
-    # 推断无币种信号的 symbol
+    # 推断无币种信号的 symbol / Infer symbol when signal has no symbol
     # ------------------------------------------------------------------
 
     async def resolve_symbol(self, text: str, parser) -> Optional[str]:
@@ -86,6 +87,7 @@ class PositionTracker:
         - 无持仓 → 返回 None
         - 只有 1 个持仓 → 直接返回该 symbol
         - 多个持仓 → 先交给 AI 根据消息内容判断，AI 无法判断时回退到最近开仓
+        Infer target position when symbol unknown. None if no positions; AI if multiple.
         """
         if not self._positions:
             logger.warning("[持仓] 收到无币种信号但当前无记录持仓，无法推断 symbol")
@@ -96,14 +98,14 @@ class PositionTracker:
             logger.info(f"[持仓] 自动推断 symbol={symbol}（唯一持仓）")
             return symbol
 
-        # 多个持仓：先让 AI 根据消息内容判断
+        # 多个持仓：先让 AI 根据消息内容判断 / Multiple positions: let AI infer from text
         positions = list(self._positions.values())
         logger.info(f"[持仓] 多个持仓（{len(positions)} 个），交由 AI 判断目标仓位...")
         resolved = await parser.resolve_position(text, positions)
         if resolved:
             return resolved
 
-        # AI 无法判断 → 回退到最近开仓
+        # AI 无法判断 → 回退到最近开仓 / AI failed → fallback to latest opened
         latest = max(positions, key=lambda p: p.opened_at)
         logger.warning(
             f"[持仓] AI 无法判断，回退到最近开仓: {latest.symbol}"
@@ -112,7 +114,7 @@ class PositionTracker:
         return latest.symbol
 
     # ------------------------------------------------------------------
-    # 查询
+    # 查询 / Query
     # ------------------------------------------------------------------
 
     def get(self, symbol: str) -> Optional[Position]:
@@ -135,7 +137,7 @@ class PositionTracker:
         return "\n".join(lines)
 
     # ------------------------------------------------------------------
-    # 持久化
+    # 持久化 / Persistence
     # ------------------------------------------------------------------
 
     def _save(self) -> None:

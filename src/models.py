@@ -17,18 +17,18 @@ class OrderType(str, Enum):
 
 @dataclass
 class EntryOrder:
-    """单个入场委托（一条信号可能含多个入场点位）"""
+    """单个入场委托（一条信号可能含多个入场点位）/ Single entry (signal may have multiple)"""
     order_type: OrderType
-    price: Optional[float]          # market 时为 None
-    leverage: int = 20              # 杠杆倍数
-    margin_pct: Optional[float] = None  # 保证金占余额百分比（2% / 3% 等）
+    price: Optional[float]          # market 时为 None / None for market
+    leverage: int = 20              # 杠杆倍数 / leverage
+    margin_pct: Optional[float] = None  # 保证金占余额百分比（2% / 3% 等）/ margin % of balance
 
 
 @dataclass
 class TakeProfit:
-    """单个止盈目标"""
+    """单个止盈目标 / Single take-profit target"""
     price: float
-    close_pct: Optional[float] = None   # 该止盈档位平仓比例（50 = 50%），None 表示全平
+    close_pct: Optional[float] = None   # 该止盈档位平仓比例（50 = 50%），None 表示全平 / close pct, None=all
 
 
 @dataclass
@@ -38,15 +38,15 @@ class Signal:
     entries: List[EntryOrder] = field(default_factory=list)
     take_profits: List[TakeProfit] = field(default_factory=list)
     sl: Optional[float] = None              # stop loss
-    # 兼容旧字段（单一入场）
+    # 兼容旧字段（单一入场）/ Legacy fields (single entry)
     order_type: OrderType = OrderType.MARKET
     entry_price: Optional[float] = None
     tp: Optional[float] = None
     size_usdt: Optional[float] = None
     size_pct: Optional[float] = None
     reduce_pct: Optional[float] = None
-    leverage: Optional[int] = None          # 全局杠杆（entries 为空时使用）
-    cancel_previous: bool = False           # 执行前先撤销该 symbol 所有未成交挂单
+    leverage: Optional[int] = None          # 全局杠杆（entries 为空时使用）/ global leverage when entries empty
+    cancel_previous: bool = False           # 执行前先撤销该 symbol 所有未成交挂单 / cancel open orders before execute
     raw_text: str = ""
 
     def __post_init__(self):
@@ -59,7 +59,7 @@ class Signal:
         self.symbol = self.symbol.upper().replace("/", "").replace("-", "")
         if not self.symbol.endswith("USDT"):
             self.symbol = self.symbol + "USDT"
-        # 规范化 entries 中的 OrderType
+        # 规范化 entries 中的 OrderType / Normalize OrderType in entries
         for e in self.entries:
             if isinstance(e.order_type, str):
                 e.order_type = OrderType(e.order_type)
@@ -74,7 +74,7 @@ class Signal:
         return self.action == Action.REDUCE
 
     def side(self) -> str:
-        """返回 Binance API 的 side 参数"""
+        """返回 Binance API 的 side 参数 / Return Binance API side param"""
         if self.action == Action.OPEN_LONG:
             return "BUY"
         if self.action == Action.OPEN_SHORT:
@@ -86,7 +86,7 @@ class Signal:
         return "BUY"
 
     def summary(self) -> str:
-        """可读摘要，用于日志与测试输出"""
+        """可读摘要，用于日志与测试输出 / Human-readable summary for logs"""
         lines = [
             f"[Signal] {self.action.value.upper()}  {self.symbol}",
         ]

@@ -1,6 +1,7 @@
 """
-AI 信号解析器
+AI 信号解析器 / AI Signal Parser
 使用 OpenRouter API（兼容 OpenAI SDK）将自然语言消息解析为标准 Signal
+Parse natural language to Signal via OpenRouter API (OpenAI-compatible)
 """
 
 import os
@@ -80,7 +81,7 @@ class SignalParser:
         self.model = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 
     async def parse(self, text: str) -> Optional[Signal]:
-        """将原始消息文本解析为 Signal，无法识别则返回 None"""
+        """将原始消息文本解析为 Signal，无法识别则返回 None / Parse text to Signal, return None if not a trade signal"""
         if not text or not text.strip():
             return None
 
@@ -98,12 +99,12 @@ class SignalParser:
             content = response.choices[0].message.content.strip()
             logger.debug(f"AI 原始输出: {content}")
 
-            # 兼容各模型：从响应中提取 JSON（支持 ```json 代码块或裸 JSON）
+            # 兼容各模型：从响应中提取 JSON（支持 ```json 代码块或裸 JSON）/ Extract JSON from response
             json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
             if json_match:
                 content = json_match.group(1)
             else:
-                # 取第一个 { ... } 块
+                # 取第一个 { ... } 块 / Take first { ... } block
                 brace_match = re.search(r"\{.*\}", content, re.DOTALL)
                 if brace_match:
                     content = brace_match.group(0)
@@ -160,6 +161,7 @@ class SignalParser:
         """
         当信号无明确币种时，将持仓列表和消息文本交给 AI 判断操作的是哪个仓位。
         返回 symbol 字符串（如 "ETHUSDT"），无法判断时返回 None。
+        When symbol unknown: let AI infer from positions + text. Returns symbol or None.
         """
         if not positions:
             return None
@@ -188,11 +190,11 @@ class SignalParser:
             logger.debug(f"持仓推断结果: {result!r}")
             if result.lower() == "null" or not result:
                 return None
-            # 规范化格式
+            # 规范化格式 / Normalize format
             result = result.upper().replace("/", "").replace("-", "")
             if not result.endswith("USDT"):
                 result = result + "USDT"
-            # 确认在持仓列表中
+            # 确认在持仓列表中 / Must be in position list
             valid_symbols = {p.symbol for p in positions}
             if result in valid_symbols:
                 logger.info(f"[持仓推断] AI 判断操作的是: {result}")

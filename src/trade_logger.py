@@ -1,7 +1,8 @@
 """
-交易记录推送器
+交易记录推送器 / Trade Logger
 通过 Discord Webhook 将成交结果发送到专属频道
-无需 Bot Token，在自己的服务器创建 Webhook 即可使用
+Push trade results to Discord channel via Webhook
+无需 Bot Token，在自己的服务器创建 Webhook 即可使用 / No Bot token needed, create Webhook in your server
 """
 
 import os
@@ -17,10 +18,10 @@ logger = logging.getLogger(__name__)
 CST = timezone(timedelta(hours=8))
 
 ACTION_META = {
-    Action.OPEN_LONG:  ("📈 开多", 0x2ECC71),   # 绿
-    Action.OPEN_SHORT: ("📉 开空", 0xE74C3C),   # 红
-    Action.CLOSE:      ("🏁 全平", 0x95A5A6),   # 灰
-    Action.REDUCE:     ("✂️ 减仓", 0xE67E22),   # 橙
+    Action.OPEN_LONG:  ("📈 开多", 0x2ECC71),   # 绿 / green
+    Action.OPEN_SHORT: ("📉 开空", 0xE74C3C),   # 红 / red
+    Action.CLOSE:      ("🏁 全平", 0x95A5A6),   # 灰 / grey
+    Action.REDUCE:     ("✂️ 减仓", 0xE67E22),   # 橙 / orange
 }
 
 
@@ -51,7 +52,7 @@ class TradeLogger:
 
         fields = []
 
-        # 入场信息
+        # 入场信息 / Entry info
         if signal.entries:
             lines = []
             for i, e in enumerate(signal.entries, 1):
@@ -60,7 +61,7 @@ class TradeLogger:
                 lines.append(f"入场#{i}: {e.order_type.value} {price_str}  {e.leverage}x{margin_str}")
             fields.append({"name": "入场", "value": "\n".join(lines), "inline": False})
 
-        # 止盈
+        # 止盈 / Take profit
         if signal.take_profits:
             tp_lines = []
             for i, tp in enumerate(signal.take_profits, 1):
@@ -68,16 +69,16 @@ class TradeLogger:
                 tp_lines.append(f"TP#{i}: {tp.price}{close_str}")
             fields.append({"name": "止盈", "value": "\n".join(tp_lines), "inline": True})
 
-        # 止损
+        # 止损 / Stop loss
         if signal.sl is not None:
             sl_str = "移至保本" if signal.sl == 0 else str(signal.sl)
             fields.append({"name": "止损", "value": sl_str, "inline": True})
 
-        # 减仓比例
+        # 减仓比例 / Reduce pct
         if signal.reduce_pct is not None:
             fields.append({"name": "减仓比例", "value": f"{signal.reduce_pct}%", "inline": True})
 
-        # 备注
+        # 备注 / Note
         if note:
             fields.append({"name": "备注", "value": note, "inline": False})
 
