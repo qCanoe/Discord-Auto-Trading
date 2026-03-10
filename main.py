@@ -9,7 +9,9 @@ When DRY_RUN=true: parse and log only, no exchange connection
 
 import os
 import asyncio
+import hashlib
 import logging
+import time
 
 import discord
 from dotenv import load_dotenv
@@ -60,6 +62,10 @@ logger.info("=" * 50)
 client = discord.Client()
 trade_logger = TradeLogger()
 
+# 去重缓存：content_hash -> 首次收到的时间戳 / Dedup cache: hash -> first-seen timestamp
+_DEDUP_TTL = 60          # 秒内相同内容视为重复 / Seconds within which identical content is a duplicate
+_seen_hashes: dict[str, float] = {}
+
 
 # ------------------------------------------------------------------
 # Discord 事件 / Discord events
@@ -87,6 +93,17 @@ async def on_message(message: discord.Message):
 
     if not text:
         return
+
+    # 去重检测 / Dedup check
+    _now = time.monotonic()
+    _expired = [h for h, t in _seen_hashes.items() if _now - t > _DEDUP_TTL]
+    for h in _expired:
+        del _seen_hashes[h]
+    _hash = hashlib.md5(text.encode()).hexdigest()
+    if _hash in _seen_hashes:
+        logger.info(f"[去重] 忽略重复消息 [{author}]: {text[:60]}")
+        return
+    _seen_hashes[_hash] = _now
 
     logger.info(f"收到消息 [{author}]: {text[:120]}")
 
