@@ -28,6 +28,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )
+logging.getLogger("discord.gateway").setLevel(logging.WARNING)
 logger = logging.getLogger("main")
 
 # ------------------------------------------------------------------
@@ -90,11 +91,17 @@ async def on_message(message: discord.Message):
 
     # 2. 无币种信号 → 从持仓推断 symbol / No symbol → infer from positions
     if signal.symbol == "UNKNOWNUSDT":
+        from src.models import Action as _Action
         resolved = await tracker.resolve_symbol(text, parser)
         if resolved is None:
-            logger.warning("无法推断币种，当前无持仓记录，跳过该信号")
-            return
-        signal.symbol = resolved
+            if signal.action in (_Action.OPEN_LONG, _Action.OPEN_SHORT):
+                signal.symbol = "BTCUSDT"
+                logger.info("[持仓] 开仓信号无币种且无持仓记录，默认使用 BTCUSDT")
+            else:
+                logger.warning("无法推断币种，当前无持仓记录，跳过该信号")
+                return
+        else:
+            signal.symbol = resolved
 
     # 3. 打印解析结果 / Log parsed result
     logger.info(f"\n{signal.summary()}")
