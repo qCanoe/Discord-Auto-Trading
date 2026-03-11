@@ -40,6 +40,16 @@ class BinanceExecutor:
         self._exchange_info_ts: float = 0
         self._exchange_info_ttl: float = 3600  # 1小时刷新一次 / 1h TTL
 
+        # 检测账户持仓模式：双向(hedge)或单向(one-way)
+        # Detect account position mode: hedge (dual) or one-way
+        try:
+            mode = self.client.futures_get_position_mode()
+            self.hedge_mode: bool = mode.get("dualSidePosition", False)
+            logger.info(f"持仓模式: {'双向(Hedge)' if self.hedge_mode else '单向(One-Way)'}")
+        except Exception:
+            self.hedge_mode = False
+            logger.warning("无法获取持仓模式，默认使用单向模式")
+
     # ------------------------------------------------------------------
     # 公开入口 / Public API
     # ------------------------------------------------------------------
@@ -73,6 +83,9 @@ class BinanceExecutor:
         """开仓：设置杠杆 → 下主单 → 挂 TP/SL / Open: set leverage → main order → TP/SL"""
         symbol = signal.symbol
 
+        # hedge mode 下 positionSide: BUY→LONG, SELL→SHORT
+        position_side = ("LONG" if side == "BUY" else "SHORT") if self.hedge_mode else None
+
         # 0. 撤销之前的挂单（如信号要求更新）/ Cancel previous orders if signal says so
         if signal.cancel_previous:
             self._cancel_open_orders(symbol)
@@ -95,6 +108,8 @@ class BinanceExecutor:
             "side": side,
             "quantity": quantity,
         }
+        if position_side:
+            order_params["positionSide"] = position_side
 
         if signal.order_type == OrderType.LIMIT and signal.entry_price:
             order_params["type"] = "LIMIT"
@@ -106,36 +121,48 @@ class BinanceExecutor:
         order = self.client.futures_create_order(**order_params)
         logger.info(f"主单成交: {side} {quantity} {symbol} | orderId={order['orderId']}")
 
+        # hedge mode 下平仓单同样要带 positionSide，不能用 closePosition=True
+        # In hedge mode, closing orders must use positionSide instead of closePosition=True
+        close_side = "SELL" if side == "BUY" else "BUY"
+
         # 4. 挂 TP 单 / Place TP order
         if signal.tp:
-            close_side = "SELL" if side == "BUY" else "BUY"
             try:
-                self.client.futures_create_order(
-                    symbol=symbol,
-                    side=close_side,
-                    type="TAKE_PROFIT_MARKET",
-                    stopPrice=signal.tp,
-                    closePosition=True,
-                    timeInForce="GTE_GTC",
-                    workingType="MARK_PRICE",
-                )
+                tp_params = {
+                    "symbol": symbol,
+                    "side": close_side,
+                    "type": "TAKE_PROFIT_MARKET",
+                    "stopPrice": signal.tp,
+                    "timeInForce": "GTE_GTC",
+                    "workingType": "MARK_PRICE",
+                }
+                if position_side:
+                    tp_params["positionSide"] = position_side
+                    tp_params["quantity"] = quantity  # hedge mode 不支持 closePosition
+                else:
+                    tp_params["closePosition"] = True
+                self.client.futures_create_order(**tp_params)
                 logger.info(f"TP 挂单: {signal.tp}")
             except BinanceAPIException as e:
                 logger.warning(f"TP 挂单失败（不影响主单）: {e.message}")
 
         # 5. 挂 SL 单 / Place SL order
         if signal.sl:
-            close_side = "SELL" if side == "BUY" else "BUY"
             try:
-                self.client.futures_create_order(
-                    symbol=symbol,
-                    side=close_side,
-                    type="STOP_MARKET",
-                    stopPrice=signal.sl,
-                    closePosition=True,
-                    timeInForce="GTE_GTC",
-                    workingType="MARK_PRICE",
-                )
+                sl_params = {
+                    "symbol": symbol,
+                    "side": close_side,
+                    "type": "STOP_MARKET",
+                    "stopPrice": signal.sl,
+                    "timeInForce": "GTE_GTC",
+                    "workingType": "MARK_PRICE",
+                }
+                if position_side:
+                    sl_params["positionSide"] = position_side
+                    sl_params["quantity"] = quantity  # hedge mode 不支持 closePosition
+                else:
+                    sl_params["closePosition"] = True
+                self.client.futures_create_order(**sl_params)
                 logger.info(f"SL 挂单: {signal.sl}")
             except BinanceAPIException as e:
                 logger.warning(f"SL 挂单失败（不影响主单）: {e.message}")
@@ -145,7 +172,8 @@ class BinanceExecutor:
     async def _close_position(self, signal: Signal) -> bool:
         """全平仓：查询当前持仓 → 市价反向全平 / Close: get position → market reverse close"""
         symbol = signal.symbol
-        position = self._get_position(symbol)
+        ps = getattr(signal, "position_side", None)  # 可选字段，hedge mode 需要
+        position = self._get_position(symbol, position_side=ps)
 
         if position is None:
             logger.warning(f"没有找到 {symbol} 的持仓")
@@ -159,13 +187,19 @@ class BinanceExecutor:
         close_side = "SELL" if amt > 0 else "BUY"
         quantity = abs(amt)
 
-        order = self.client.futures_create_order(
-            symbol=symbol,
-            side=close_side,
-            type="MARKET",
-            quantity=quantity,
-            reduceOnly=True,
-        )
+        order_params = {
+            "symbol": symbol,
+            "side": close_side,
+            "type": "MARKET",
+            "quantity": quantity,
+        }
+        if self.hedge_mode:
+            # hedge mode 用 positionSide 代替 reduceOnly
+            order_params["positionSide"] = position["positionSide"]
+        else:
+            order_params["reduceOnly"] = True
+
+        order = self.client.futures_create_order(**order_params)
         logger.info(f"全平仓: {close_side} {quantity} {symbol} | orderId={order['orderId']}")
 
         # 取消未成交的 TP/SL / Cancel open TP/SL
@@ -177,7 +211,8 @@ class BinanceExecutor:
         symbol = signal.symbol
         pct = signal.reduce_pct or 50.0  # 默认减仓 50% / default 50%
 
-        position = self._get_position(symbol)
+        ps = getattr(signal, "position_side", None)
+        position = self._get_position(symbol, position_side=ps)
         if position is None:
             logger.warning(f"没有找到 {symbol} 的持仓")
             return False
@@ -194,13 +229,18 @@ class BinanceExecutor:
             logger.error("减仓数量计算为 0，跳过")
             return False
 
-        order = self.client.futures_create_order(
-            symbol=symbol,
-            side=close_side,
-            type="MARKET",
-            quantity=quantity,
-            reduceOnly=True,
-        )
+        order_params = {
+            "symbol": symbol,
+            "side": close_side,
+            "type": "MARKET",
+            "quantity": quantity,
+        }
+        if self.hedge_mode:
+            order_params["positionSide"] = position["positionSide"]
+        else:
+            order_params["reduceOnly"] = True
+
+        order = self.client.futures_create_order(**order_params)
         logger.info(f"减仓 {pct}%: {close_side} {quantity} {symbol} | orderId={order['orderId']}")
         return True
 
@@ -223,9 +263,21 @@ class BinanceExecutor:
         quantity = notional / mark
         return self._floor_quantity(quantity, symbol)
 
-    def _get_position(self, symbol: str) -> Optional[dict]:
-        """获取指定 symbol 的持仓信息 / Get position for symbol"""
+    def _get_position(self, symbol: str, position_side: Optional[str] = None) -> Optional[dict]:
+        """获取指定 symbol 的持仓信息
+        hedge mode 下传入 position_side('LONG'/'SHORT') 精确匹配；
+        one-way mode 下直接返回第一条非零持仓或首条记录。
+        """
         positions = self.client.futures_position_information(symbol=symbol)
+        if self.hedge_mode:
+            for p in positions:
+                if p["symbol"] == symbol and p.get("positionSide") == position_side:
+                    return p
+            return None
+        # one-way mode: 优先返回有仓位的条目
+        for p in positions:
+            if p["symbol"] == symbol and float(p["positionAmt"]) != 0:
+                return p
         for p in positions:
             if p["symbol"] == symbol:
                 return p
