@@ -63,8 +63,24 @@ client = discord.Client()
 trade_logger = TradeLogger()
 
 # 去重缓存：content_hash -> 首次收到的时间戳 / Dedup cache: hash -> first-seen timestamp
-_DEDUP_TTL = 60          # 秒内相同内容视为重复 / Seconds within which identical content is a duplicate
+_DEDUP_TTL = 60          # 秒内相同原始文本视为重复 / Seconds within which identical text is a duplicate
 _seen_hashes: dict[str, float] = {}
+
+# 信号指纹去重：防止不同措辞的相同策略重复执行 / Signal-level dedup: same strategy, different wording
+_SIGNAL_DEDUP_TTL = int(os.getenv("SIGNAL_DEDUP_TTL", "86400"))  # 默认 24 小时 / Default 24 h
+_seen_signal_fps: dict[str, float] = {}
+
+
+def _signal_fingerprint(signal) -> str:
+    """
+    基于信号关键字段生成指纹，用于去重。
+    Generate fingerprint from key signal fields for deduplication.
+    使用入场价列表（排序后）+ SL + action + symbol，忽略止盈差异（止盈可能逐步补充）。
+    Uses sorted entry prices + SL + action + symbol; ignores TPs (may be added incrementally).
+    """
+    entry_prices = sorted(e.price or 0 for e in signal.entries)
+    key = f"{signal.action.value}|{signal.symbol}|{entry_prices}|{signal.sl}"
+    return hashlib.md5(key.encode()).hexdigest()
 
 
 # ------------------------------------------------------------------
@@ -94,7 +110,7 @@ async def on_message(message: discord.Message):
     if not text:
         return
 
-    # 去重检测 / Dedup check
+    # 原始文本去重 / Raw-text dedup
     _now = time.monotonic()
     _expired = [h for h, t in _seen_hashes.items() if _now - t > _DEDUP_TTL]
     for h in _expired:
@@ -128,6 +144,23 @@ async def on_message(message: discord.Message):
 
     # 3. 打印解析结果 / Log parsed result
     logger.info(f"\n{signal.summary()}")
+
+    # 信号指纹去重（仅对开仓信号）：防止不同措辞的相同策略重复执行
+    # Signal-level dedup (open signals only): same strategy, different wording
+    if signal.is_open():
+        _sig_now = time.monotonic()
+        _sig_expired = [fp for fp, t in _seen_signal_fps.items() if _sig_now - t > _SIGNAL_DEDUP_TTL]
+        for fp in _sig_expired:
+            del _seen_signal_fps[fp]
+        _fp = _signal_fingerprint(signal)
+        if _fp in _seen_signal_fps:
+            elapsed = int(_sig_now - _seen_signal_fps[_fp])
+            logger.warning(
+                f"[去重] 忽略重复策略信号（{elapsed}s 前已执行过相同策略）: "
+                f"{signal.action.value} {signal.symbol}"
+            )
+            return
+        _seen_signal_fps[_fp] = _sig_now
     logger.info(tracker.summary())
 
     if DRY_RUN:
