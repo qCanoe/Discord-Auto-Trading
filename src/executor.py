@@ -80,73 +80,181 @@ class BinanceExecutor:
     # ------------------------------------------------------------------
 
     async def _open_position(self, signal: Signal, side: str) -> bool:
-        """开仓：设置杠杆 → 下主单 → 挂 TP/SL / Open: set leverage → main order → TP/SL"""
+        """开仓：设置杠杆 → 下主单(支持多入场) → 挂 TP/SL
+        Open: set leverage → main order(s) (multi-entry supported) → TP/SL"""
         symbol = signal.symbol
 
         # hedge mode 下 positionSide: BUY→LONG, SELL→SHORT
         position_side = ("LONG" if side == "BUY" else "SHORT") if self.hedge_mode else None
+        close_side = "SELL" if side == "BUY" else "BUY"
 
         # 0. 撤销之前的挂单（如信号要求更新）/ Cancel previous orders if signal says so
         if signal.cancel_previous:
             self._cancel_open_orders(symbol)
             logger.info(f"[撤单] 已取消 {symbol} 所有未成交挂单，准备重新下单")
 
-        # 1. 设置杠杆 / Set leverage
-        leverage = self.default_leverage
-        self.client.futures_change_leverage(symbol=symbol, leverage=leverage)
-        logger.info(f"设置杠杆: {symbol} x{leverage}")
+        # ------------------------------------------------------------------
+        # 优先使用 signal.entries（多入场点），兼容旧字段单一入场
+        # Prefer signal.entries (multi-entry); fall back to legacy single entry
+        # ------------------------------------------------------------------
+        if signal.entries:
+            # 1. 设置杠杆（取第一个入场的杠杆）/ Set leverage from first entry
+            leverage = signal.entries[0].leverage
+            self.client.futures_change_leverage(symbol=symbol, leverage=leverage)
+            logger.info(f"设置杠杆: {symbol} x{leverage}")
 
-        # 2. 计算下单数量 / Calc quantity
-        quantity = await self._calc_quantity(signal, symbol)
-        if quantity is None or quantity <= 0:
-            logger.error("无法计算下单数量")
-            return False
+            mark = float(self.client.futures_mark_price(symbol=symbol)["markPrice"])
+            balance = self._get_usdt_balance()
+            total_quantity = 0.0
 
-        # 3. 主单 / Main order
-        order_params = {
-            "symbol": symbol,
-            "side": side,
-            "quantity": quantity,
-        }
-        if position_side:
-            order_params["positionSide"] = position_side
+            # 2. 逐个入场点下单 / Place one order per entry
+            for idx, entry in enumerate(signal.entries, 1):
+                # 如果该入场点杠杆与已设置的不同，重新设置
+                # Re-set leverage if this entry uses a different value
+                if entry.leverage != leverage:
+                    leverage = entry.leverage
+                    self.client.futures_change_leverage(symbol=symbol, leverage=leverage)
+                    logger.info(f"更新杠杆: {symbol} x{leverage}")
 
-        if signal.order_type == OrderType.LIMIT and signal.entry_price:
-            order_params["type"] = "LIMIT"
-            order_params["price"] = signal.entry_price
-            order_params["timeInForce"] = "GTC"
+                # 根据 margin_pct 或全局 size_usdt/size_pct 计算数量
+                # Calc quantity from margin_pct or global size fields
+                if entry.margin_pct is not None:
+                    ref_price = entry.price if entry.price else mark
+                    notional = balance * entry.margin_pct / 100 * entry.leverage
+                    qty = self._floor_quantity(notional / ref_price, symbol)
+                else:
+                    qty = await self._calc_quantity(signal, symbol, leverage=entry.leverage)
+
+                if not qty or qty <= 0:
+                    logger.error(f"入场#{idx} 数量计算为 0，跳过")
+                    continue
+
+                order_params = {
+                    "symbol": symbol,
+                    "side": side,
+                    "quantity": qty,
+                }
+                if position_side:
+                    order_params["positionSide"] = position_side
+
+                if entry.order_type == OrderType.LIMIT and entry.price:
+                    order_params["type"] = "LIMIT"
+                    order_params["price"] = entry.price
+                    order_params["timeInForce"] = "GTC"
+                    order_label = f"限价挂单 @{entry.price}"
+                else:
+                    order_params["type"] = "MARKET"
+                    order_label = "市价单"
+
+                order = self.client.futures_create_order(**order_params)
+                logger.info(
+                    f"入场#{idx} {order_label}: {side} {qty} {symbol}"
+                    f" | orderId={order['orderId']}"
+                )
+                total_quantity += qty
+
+            if total_quantity <= 0:
+                logger.error("所有入场点下单失败")
+                return False
+
+            # TP/SL 使用全部入场合计数量 / TP/SL use total entry quantity
+            quantity = total_quantity
+
         else:
-            order_params["type"] = "MARKET"
+            # ------------------------------------------------------------------
+            # 旧字段单一入场兼容路径 / Legacy single-entry fallback
+            # ------------------------------------------------------------------
+            leverage = self.default_leverage
+            self.client.futures_change_leverage(symbol=symbol, leverage=leverage)
+            logger.info(f"设置杠杆: {symbol} x{leverage}")
 
-        order = self.client.futures_create_order(**order_params)
-        logger.info(f"主单成交: {side} {quantity} {symbol} | orderId={order['orderId']}")
+            quantity = await self._calc_quantity(signal, symbol)
+            if quantity is None or quantity <= 0:
+                logger.error("无法计算下单数量")
+                return False
 
-        # hedge mode 下平仓单同样要带 positionSide，不能用 closePosition=True
-        # In hedge mode, closing orders must use positionSide instead of closePosition=True
-        close_side = "SELL" if side == "BUY" else "BUY"
+            order_params = {
+                "symbol": symbol,
+                "side": side,
+                "quantity": quantity,
+            }
+            if position_side:
+                order_params["positionSide"] = position_side
 
-        # 4. 挂 TP 单 / Place TP order
-        if signal.tp:
+            if signal.order_type == OrderType.LIMIT and signal.entry_price:
+                order_params["type"] = "LIMIT"
+                order_params["price"] = signal.entry_price
+                order_params["timeInForce"] = "GTC"
+                order_label = f"限价挂单 @{signal.entry_price}"
+            else:
+                order_params["type"] = "MARKET"
+                order_label = "市价单"
+
+            order = self.client.futures_create_order(**order_params)
+            logger.info(f"主单 {order_label}: {side} {quantity} {symbol} | orderId={order['orderId']}")
+
+        # ------------------------------------------------------------------
+        # 4. 挂 TP 单（支持多止盈 take_profits，兼容旧字段 tp）
+        # Place TP order(s): prefer take_profits list, fall back to legacy tp
+        #
+        # Binance Futures 不支持 OTOCO 挂单组，但 reduceOnly=True + quantity 的
+        # 条件单可以在无仓位时提前挂好：入场成交后自动生效；若价格未经过入场价
+        # 而直接触发止损，因为 reduceOnly=True，无仓位时会自动撤单，不会乱开仓。
+        # Binance Futures has no OTOCO. Use reduceOnly=True so orders placed before
+        # entry fills are safe: they activate once entry fills; if triggered with no
+        # position they auto-cancel (never create unintended positions).
+        # ------------------------------------------------------------------
+
+        tp_targets = []
+        if signal.take_profits:
+            # 将 close_pct=None 的档位平均分配剩余百分比
+            # Distribute remaining pct evenly across None-pct TP levels
+            explicit_pct = sum(tp.close_pct for tp in signal.take_profits if tp.close_pct is not None)
+            none_count = sum(1 for tp in signal.take_profits if tp.close_pct is None)
+            per_none_pct = (max(0.0, 100.0 - explicit_pct) / none_count) if none_count else 0.0
+            for tp in signal.take_profits:
+                pct = tp.close_pct if tp.close_pct is not None else per_none_pct
+                tp_targets.append((tp.price, pct))
+        elif signal.tp:
+            tp_targets = [(signal.tp, None)]  # 旧字段：全平 / legacy: close all
+
+        remaining_qty = quantity
+        for tp_idx, (tp_price, close_pct) in enumerate(tp_targets, 1):
+            is_last = (tp_idx == len(tp_targets))
             try:
+                if is_last or close_pct is None:
+                    tp_qty = remaining_qty  # 最后一档平剩余全部 / last TP: close remainder
+                else:
+                    tp_qty = self._floor_quantity(quantity * close_pct / 100, symbol)
+                    remaining_qty -= tp_qty
+
                 tp_params = {
                     "symbol": symbol,
                     "side": close_side,
                     "type": "TAKE_PROFIT_MARKET",
-                    "stopPrice": signal.tp,
+                    "stopPrice": tp_price,
+                    "quantity": tp_qty,
                     "timeInForce": "GTE_GTC",
                     "workingType": "MARK_PRICE",
                 }
                 if position_side:
                     tp_params["positionSide"] = position_side
-                    tp_params["quantity"] = quantity  # hedge mode 不支持 closePosition
                 else:
-                    tp_params["closePosition"] = True
-                self.client.futures_create_order(**tp_params)
-                logger.info(f"TP 挂单: {signal.tp}")
-            except BinanceAPIException as e:
-                logger.warning(f"TP 挂单失败（不影响主单）: {e.message}")
+                    # one-way mode：统一用 reduceOnly=True，兼容限价入场未成交的情况
+                    # reduceOnly=True works with pending limit entries too
+                    tp_params["reduceOnly"] = True
 
+                self.client.futures_create_order(**tp_params)
+                pct_str = f"平{close_pct}%" if close_pct is not None else "全平"
+                logger.info(f"TP#{tp_idx} 挂单: {tp_price}  {pct_str}  qty={tp_qty}")
+            except BinanceAPIException as e:
+                logger.warning(f"TP#{tp_idx} 挂单失败（不影响主单）: {e.message}")
+
+        # ------------------------------------------------------------------
         # 5. 挂 SL 单 / Place SL order
+        # 同样使用 reduceOnly=True + quantity，与限价入场单配合不会乱开仓
+        # Also use reduceOnly=True so it's safe with pending limit entries
+        # ------------------------------------------------------------------
         if signal.sl:
             try:
                 sl_params = {
@@ -154,14 +262,14 @@ class BinanceExecutor:
                     "side": close_side,
                     "type": "STOP_MARKET",
                     "stopPrice": signal.sl,
+                    "quantity": quantity,
                     "timeInForce": "GTE_GTC",
                     "workingType": "MARK_PRICE",
                 }
                 if position_side:
                     sl_params["positionSide"] = position_side
-                    sl_params["quantity"] = quantity  # hedge mode 不支持 closePosition
                 else:
-                    sl_params["closePosition"] = True
+                    sl_params["reduceOnly"] = True
                 self.client.futures_create_order(**sl_params)
                 logger.info(f"SL 挂单: {signal.sl}")
             except BinanceAPIException as e:
@@ -248,17 +356,23 @@ class BinanceExecutor:
     # 工具方法 / Utilities
     # ------------------------------------------------------------------
 
-    async def _calc_quantity(self, signal: Signal, symbol: str) -> Optional[float]:
-        """根据 size_usdt 或 size_pct 计算合约数量 / Calc quantity from size_usdt or size_pct"""
-        # 获取当前标记价格 / Get mark price
+    async def _calc_quantity(
+        self,
+        signal: Signal,
+        symbol: str,
+        leverage: Optional[int] = None,
+    ) -> Optional[float]:
+        """根据 size_usdt 或 size_pct 计算合约数量 / Calc quantity from size_usdt or size_pct
+        leverage 参数优先于 default_leverage（entries 路径传入 entry.leverage）"""
+        lev = leverage if leverage is not None else self.default_leverage
         mark = float(self.client.futures_mark_price(symbol=symbol)["markPrice"])
 
         if signal.size_usdt:
-            notional = signal.size_usdt * self.default_leverage
+            notional = signal.size_usdt * lev
         else:
             pct = signal.size_pct if signal.size_pct else self.default_size_pct
             balance = self._get_usdt_balance()
-            notional = balance * pct / 100 * self.default_leverage
+            notional = balance * pct / 100 * lev
 
         quantity = notional / mark
         return self._floor_quantity(quantity, symbol)
